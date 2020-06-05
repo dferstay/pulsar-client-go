@@ -116,24 +116,36 @@ func (p *producer) internalCreatePartitionsProducers() error {
 	p.Lock()
 	defer p.Unlock()
 	oldProducers := p.producers
+	oldNumPartitions = len(oldProducers)
 
-	if oldProducers != nil {
-		oldNumPartitions = len(oldProducers)
-		if oldNumPartitions == newNumPartitions {
-			p.log.Debug("Number of partitions in topic has not changed")
-			return nil
-		}
-
-		p.log.WithField("old_partitions", oldNumPartitions).
-			WithField("new_partitions", newNumPartitions).
-			Info("Changed number of partitions in topic")
+	if oldNumPartitions == newNumPartitions {
+		p.log.Debug("Number of partitions in topic has not changed")
+		return nil
 	}
+
+	p.log.WithField("old_partitions", oldNumPartitions).
+		WithField("new_partitions", newNumPartitions).
+		Info("Changed number of partitions in topic")
 
 	p.producers = make([]Producer, newNumPartitions)
 
 	// Copy over the existing consumer instances
-	for i := 0; i < oldNumPartitions; i++ {
-		p.producers[i] = oldProducers[i]
+	oldPartitions := make([]string, 0)
+	for _, op := range oldProducers {
+		// NB: partition is stored in topic field of partitionProducer
+		part := op.Topic()
+		if contains(partitions, part) {
+			oldPartitions = append(oldPartitions, part)
+			partIdx := indexOf(partitions, part)
+			p.producers[partIdx] = op
+		}
+	}
+
+	partitionsToAdd := make([]string, 0)
+	for _, part := range partitions {
+		if !contains(oldPartitions, part) {
+			partitionsToAdd = append(partitionsToAdd, part)
+		}
 	}
 
 	type ProducerError struct {
@@ -142,11 +154,19 @@ func (p *producer) internalCreatePartitionsProducers() error {
 		err       error
 	}
 
-	partitionsToAdd := newNumPartitions - oldNumPartitions
-	c := make(chan ProducerError, partitionsToAdd)
+	if len(partitionsToAdd) == 0 {
+		p.log.WithField("old_partitions", oldNumPartitions).
+			WithField("new_partitions", newNumPartitions).
+			Info("Partitions were revoked, short-circuit")
 
-	for partitionIdx := oldNumPartitions; partitionIdx < newNumPartitions; partitionIdx++ {
-		partition := partitions[partitionIdx]
+		atomic.StoreUint32(&p.numPartitions, uint32(len(p.producers)))
+		return nil
+	}
+
+	c := make(chan ProducerError, len(partitionsToAdd))
+
+	for _, partition := range partitionsToAdd {
+		partitionIdx := indexOf(partitions, partition)
 
 		go func(partitionIdx int, partition string) {
 			prod, e := newPartitionProducer(p.client, partition, p.options, partitionIdx)
@@ -158,7 +178,7 @@ func (p *producer) internalCreatePartitionsProducers() error {
 		}(partitionIdx, partition)
 	}
 
-	for i := 0; i < partitionsToAdd; i++ {
+	for i := 0; i < len(partitionsToAdd); i++ {
 		pe, ok := <-c
 		if ok {
 			if pe.err != nil {
@@ -252,4 +272,22 @@ func (p *producer) Close() {
 		pp.Close()
 	}
 	p.client.handlers.Del(p)
+}
+
+func contains(vs []string, s string) bool {
+	for _, v := range vs {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func indexOf(vs []string, t string) int {
+	for i, v := range vs {
+		if v == t {
+			return i
+		}
+	}
+	return -1
 }
