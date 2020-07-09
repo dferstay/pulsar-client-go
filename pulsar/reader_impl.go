@@ -30,7 +30,7 @@ const (
 type reader struct {
 	pc                  *partitionConsumer
 	messageCh           chan ConsumerMessage
-	lastMessageInBroker *messageID
+	lastMessageInBroker *trackingMessageID
 
 	log *log.Entry
 }
@@ -44,17 +44,25 @@ func newReader(client *client, options ReaderOptions) (Reader, error) {
 		return nil, newError(ResultInvalidConfiguration, "StartMessageID is required")
 	}
 
-	var startMessageID *messageID
-	var ok bool
-	if startMessageID, ok = options.StartMessageID.(*messageID); !ok {
-		// a custom type satisfying MessageID may not be a *messageID
-		// so re-create *messageID using its data
+	var startMessageID *trackingMessageID
+	if msgID, ok := options.StartMessageID.(messageID); ok {
+		startMessageID = &trackingMessageID{
+			messageID: msgID,
+		}
+	} else if msgID, ok := options.StartMessageID.(*trackingMessageID); ok {
+		startMessageID = msgID
+	} else {
+		// a custom type satisfying MessageID may not be a messageID or *trackingMessageID
+		// so re-create messageID using its data
 		deserMsgID, err := deserializeMessageID(options.StartMessageID.Serialize())
 		if err != nil {
 			return nil, err
 		}
 		// de-serialized MessageID is a *messageID
-		startMessageID = deserMsgID.(*messageID)
+		mid := deserMsgID.(messageID)
+		startMessageID = &trackingMessageID{
+			messageID: mid,
+		}
 	}
 
 	subscriptionName := options.SubscriptionRolePrefix
@@ -118,7 +126,7 @@ func (r *reader) Next(ctx context.Context) (Message, error) {
 
 			// Acknowledge message immediately because the reader is based on non-durable subscription. When it reconnects,
 			// it will specify the subscription position anyway
-			msgID := cm.Message.ID().(*messageID)
+			msgID := cm.Message.ID().(*trackingMessageID)
 			r.pc.lastDequeuedMsg = msgID
 			r.pc.AckID(msgID)
 			return cm.Message, nil
@@ -149,15 +157,15 @@ func (r *reader) HasNext() bool {
 
 func (r *reader) hasMoreMessages() bool {
 	if r.pc.lastDequeuedMsg != nil {
-		return r.lastMessageInBroker.greater(r.pc.lastDequeuedMsg)
+		return r.lastMessageInBroker.greater(r.pc.lastDequeuedMsg.messageID)
 	}
 
 	if r.pc.options.startMessageIDInclusive {
-		return r.lastMessageInBroker.greaterEqual(r.pc.startMessageID)
+		return r.lastMessageInBroker.greaterEqual(r.pc.startMessageID.messageID)
 	}
 
 	// Non-inclusive
-	return r.lastMessageInBroker.greater(r.pc.startMessageID)
+	return r.lastMessageInBroker.greater(r.pc.startMessageID.messageID)
 }
 
 func (r *reader) Close() {

@@ -33,12 +33,16 @@ type messageID struct {
 	entryID      int64
 	batchIdx     int32
 	partitionIdx int32
+}
+
+type trackingMessageID struct {
+	messageID
 
 	tracker  *ackTracker
 	consumer acker
 }
 
-func (id *messageID) Ack() {
+func (id *trackingMessageID) Ack() {
 	if id.consumer == nil {
 		return
 	}
@@ -47,21 +51,21 @@ func (id *messageID) Ack() {
 	}
 }
 
-func (id *messageID) Nack() {
+func (id *trackingMessageID) Nack() {
 	if id.consumer == nil {
 		return
 	}
 	id.consumer.NackID(id)
 }
 
-func (id *messageID) ack() bool {
+func (id *trackingMessageID) ack() bool {
 	if id.tracker != nil && id.batchIdx > -1 {
 		return id.tracker.ack(int(id.batchIdx))
 	}
 	return true
 }
 
-func (id *messageID) greater(other *messageID) bool {
+func (id messageID) greater(other messageID) bool {
 	if id.ledgerID != other.ledgerID {
 		return id.ledgerID > other.ledgerID
 	}
@@ -73,17 +77,17 @@ func (id *messageID) greater(other *messageID) bool {
 	return id.batchIdx > other.batchIdx
 }
 
-func (id *messageID) equal(other *messageID) bool {
+func (id messageID) equal(other messageID) bool {
 	return id.ledgerID == other.ledgerID &&
 		id.entryID == other.entryID &&
 		id.batchIdx == other.batchIdx
 }
 
-func (id *messageID) greaterEqual(other *messageID) bool {
+func (id messageID) greaterEqual(other messageID) bool {
 	return id.equal(other) || id.greater(other)
 }
 
-func (id *messageID) Serialize() []byte {
+func (id messageID) Serialize() []byte {
 	msgID := &pb.MessageIdData{
 		LedgerId:   proto.Uint64(uint64(id.ledgerID)),
 		EntryId:    proto.Uint64(uint64(id.entryID)),
@@ -110,7 +114,7 @@ func deserializeMessageID(data []byte) (MessageID, error) {
 }
 
 func newMessageID(ledgerID int64, entryID int64, batchIdx int32, partitionIdx int32) MessageID {
-	return &messageID{
+	return messageID{
 		ledgerID:     ledgerID,
 		entryID:      entryID,
 		batchIdx:     batchIdx,
@@ -119,13 +123,15 @@ func newMessageID(ledgerID int64, entryID int64, batchIdx int32, partitionIdx in
 }
 
 func newTrackingMessageID(ledgerID int64, entryID int64, batchIdx int32, partitionIdx int32,
-	tracker *ackTracker) *messageID {
-	return &messageID{
-		ledgerID:     ledgerID,
-		entryID:      entryID,
-		batchIdx:     batchIdx,
-		partitionIdx: partitionIdx,
-		tracker:      tracker,
+	tracker *ackTracker) *trackingMessageID {
+	return &trackingMessageID{
+		messageID: messageID{
+			ledgerID:     ledgerID,
+			entryID:      entryID,
+			batchIdx:     batchIdx,
+			partitionIdx: partitionIdx,
+		},
+		tracker: tracker,
 	}
 }
 

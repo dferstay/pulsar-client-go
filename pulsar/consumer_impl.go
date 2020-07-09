@@ -36,8 +36,8 @@ var ErrConsumerClosed = errors.New("consumer closed")
 const defaultNackRedeliveryDelay = 1 * time.Minute
 
 type acker interface {
-	AckID(id *messageID)
-	NackID(id *messageID)
+	AckID(id *trackingMessageID)
+	NackID(id *trackingMessageID)
 }
 
 type consumer struct {
@@ -452,10 +452,10 @@ func toProtoInitialPosition(p SubscriptionInitialPosition) pb.CommandSubscribe_I
 	return pb.CommandSubscribe_Latest
 }
 
-func (c *consumer) messageID(msgID MessageID) (*messageID, bool) {
-	mid, ok := msgID.(*messageID)
+func (c *consumer) messageID(msgID MessageID) (*trackingMessageID, bool) {
+	mid, ok := msgID.(*trackingMessageID)
 	if !ok {
-		c.log.Warnf("invalid message id type")
+		c.log.Warnf("invalid message id type %T", msgID)
 		return nil, false
 	}
 
