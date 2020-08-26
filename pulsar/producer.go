@@ -174,7 +174,8 @@ type Producer interface {
 	Name() string
 
 	// Send a message
-	// This call will be blocking until is successfully acknowledged by the Pulsar broker.
+	// This call will be blocking until is successfully acknowledged by the Pulsar broker or when the specified
+	// context expires, whichever comes first.
 	// Example:
 	// producer.Send(ctx, pulsar.ProducerMessage{ Payload: myPayload })
 	Send(context.Context, *ProducerMessage) (MessageID, error)

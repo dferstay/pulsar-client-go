@@ -930,6 +930,65 @@ func TestSendTimeout(t *testing.T) {
 	makeHTTPCall(t, http.MethodDelete, quotaURL, "")
 }
 
+func TestSendContextExpired(t *testing.T) {
+	quotaURL := adminURL + "/admin/v2/namespaces/public/default/backlogQuota"
+	quotaFmt := `{"limit": "%d", "policy": "producer_request_hold"}`
+	makeHTTPCall(t, http.MethodPost, quotaURL, fmt.Sprintf(quotaFmt, 1*1024))
+
+	client, err := NewClient(ClientOptions{
+		URL: serviceURL,
+	})
+	assert.NoError(t, err)
+	defer client.Close()
+
+	topicName := newTopicName()
+	consumer, err := client.Subscribe(ConsumerOptions{
+		Topic:            topicName,
+		SubscriptionName: "send_context_expired_sub",
+	})
+	assert.Nil(t, err)
+	defer consumer.Close() // subscribe but do nothing
+
+	noRetry := uint(0)
+	producer, err := client.CreateProducer(ProducerOptions{
+		Topic:                topicName,
+		MaxPendingMessages:   1,
+		MaxReconnectToBroker: &noRetry,
+	})
+	assert.Nil(t, err)
+	defer producer.Close()
+
+	// first publish completes and fills the available backlog
+	id, err := producer.Send(context.Background(), &ProducerMessage{
+		Payload: make([]byte, 1024),
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, id)
+
+	// waiting for the backlog check
+	time.Sleep((5 + 1) * time.Second)
+
+	// second publish will not complete due to the backlog quota being full;
+	// this consumes the only available MaxPendingMessages permit
+	producer.SendAsync(context.Background(), &ProducerMessage{
+		Payload: make([]byte, 1024),
+	}, func(_ MessageID, _ *ProducerMessage, _ error) {
+		// we're not interested in the result of this send
+	})
+
+	// third publish will block waiting for a send permit to become available
+	// and timeout after one second
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	id, err = producer.Send(ctx, &ProducerMessage{
+		Payload: make([]byte, 1024),
+	})
+	assert.NotNil(t, err)
+	assert.Nil(t, id)
+
+	makeHTTPCall(t, http.MethodDelete, quotaURL, "")
+}
+
 type noopProduceInterceptor struct{}
 
 func (noopProduceInterceptor) BeforeSend(producer Producer, message *ProducerMessage) {}
