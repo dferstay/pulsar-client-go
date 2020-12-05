@@ -48,6 +48,9 @@ type client struct {
 }
 
 func newClient(options ClientOptions) (Client, error) {
+	// start the internal clock source used for measuring operation latency
+	internal.StartClockSource()
+
 	var logger log.Logger
 	if options.Logger != nil {
 		logger = options.Logger
